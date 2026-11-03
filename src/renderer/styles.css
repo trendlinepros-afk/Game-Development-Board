@@ -358,3 +358,31 @@ button { font: inherit; color: inherit; }
 .swatch[data-note="pink"] { background: var(--note-pink); }
 .swatch[data-note="purple"] { background: var(--note-purple); }
 .swatch[data-note="gray"] { background: var(--note-gray); }
+
+/* ---------------- drawing toolbar ---------------- */
+#drawbar {
+  height: 42px; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 12px;
+  background: var(--panel); border-bottom: 1px solid var(--border);
+}
+#drawbar.disabled { opacity: 0.4; pointer-events: none; }
+#drawbar .tool.on { background: var(--accent-soft); color: var(--accent-2); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+#drawbar .width.on { background: var(--active); }
+#drawbar #dashBtn.on { background: var(--active); }
+.wdot { display: inline-block; border-radius: 50%; background: currentColor; }
+.stroke-swatch { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--border); cursor: pointer; padding: 0; margin: 0 2px; }
+.stroke-swatch:hover { transform: scale(1.12); }
+.stroke-swatch.on { box-shadow: 0 0 0 2px var(--accent); }
+.draw-hint { margin-left: auto; color: var(--faint); font-size: 12px; }
+
+#canvasWrap.tool-draw, #canvasWrap.tool-draw .item, #canvasWrap.tool-draw .item * { cursor: crosshair !important; }
+#canvasWrap.tool-eraser, #canvasWrap.tool-eraser .item, #canvasWrap.tool-eraser .item * { cursor: cell !important; }
+
+/* drawings: only the stroke itself is clickable, so a long diagonal line doesn't block what's underneath */
+.item-draw { pointer-events: none; }
+.item-draw svg { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.item-draw .hit { fill: none; stroke: transparent; pointer-events: stroke; cursor: move; }
+.item-draw .handle { pointer-events: auto; }
+.item-draw.selected { outline-style: dashed; outline-width: calc(1.5px * var(--inv)); }
+.item-draw.kind-line.selected, .item-draw.kind-arrow.selected { outline: none; }
+.handle.pt { transform: translate(-50%, -50%); border-radius: 50%; cursor: grab; }
+.item-draw.erase-hover svg { opacity: 0.35; }

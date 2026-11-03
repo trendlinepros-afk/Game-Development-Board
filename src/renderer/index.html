@@ -115,6 +115,54 @@
         </div>
       </header>
 
+      <div id="drawbar">
+        <div class="toolbar-group" id="toolGroup">
+          <button class="tb-btn tool on" data-tool="select" title="Select / move (V)">
+            <svg viewBox="0 0 16 16" width="15" height="15"><path d="M3 2l9.5 6.2-4.3.9 2.4 4.4-1.6.9-2.4-4.4L3.3 12.6z" fill="currentColor"/></svg>
+          </button>
+          <span class="sep"></span>
+          <button class="tb-btn tool" data-tool="pen" title="Free draw (P)">
+            <svg viewBox="0 0 16 16" width="15" height="15"><path d="M2 14c1.5-.3 2.4-1 3-2.2l7.6-7.6a1.4 1.4 0 0 0-2-2L3 9.8C1.8 10.4 1.4 11.6 2 14z" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="tb-btn tool" data-tool="highlighter" title="Highlighter (H)">
+            <svg viewBox="0 0 16 16" width="15" height="15"><path d="M5 11l-2.5 2.5h4L7 13M5 11l1.5-5.5L11 2l3 3-3.5 4.5L5 11z" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linejoin="round"/><path d="M8.5 13.5h6" stroke="currentColor" stroke-width="2.4" opacity=".45"/></svg>
+          </button>
+          <button class="tb-btn tool" data-tool="line" title="Straight line (L) · Shift snaps to 45°">
+            <svg viewBox="0 0 16 16" width="15" height="15"><path d="M3 13L13 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
+          <button class="tb-btn tool" data-tool="arrow" title="Arrow (A) · Shift snaps to 45°">
+            <svg viewBox="0 0 16 16" width="15" height="15"><path d="M3 13L12.5 3.5M7 3h6v6" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="tb-btn tool" data-tool="rect" title="Rectangle (R) · Shift for square">
+            <svg viewBox="0 0 16 16" width="15" height="15"><rect x="2.5" y="3.5" width="11" height="9" rx="1" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+          </button>
+          <button class="tb-btn tool" data-tool="ellipse" title="Ellipse (O) · Shift for circle">
+            <svg viewBox="0 0 16 16" width="15" height="15"><ellipse cx="8" cy="8" rx="6" ry="4.6" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+          </button>
+          <button class="tb-btn tool" data-tool="eraser" title="Eraser: drag over drawings to remove them (E)">
+            <svg viewBox="0 0 16 16" width="15" height="15"><path d="M6 13.5h8M2.8 9.6l6-6a1.5 1.5 0 0 1 2.1 0l2.2 2.2a1.5 1.5 0 0 1 0 2.1L8.4 12.6a3 3 0 0 1-4.2 0l-1.4-1.4a1.1 1.1 0 0 1 0-1.6zM5.5 7l4.2 4.2" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+        <span class="sep"></span>
+        <div class="toolbar-group" id="strokeColors" title="Stroke color"></div>
+        <label class="tb-color" title="Custom stroke color">
+          <svg viewBox="0 0 16 16" width="15" height="15"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 2a6 6 0 0 1 0 12z" fill="currentColor" opacity=".5"/></svg>
+          <input type="color" id="strokeCustom" value="#e03131" />
+        </label>
+        <span class="sep"></span>
+        <div class="toolbar-group" id="strokeWidths">
+          <button class="tb-btn width" data-width="2" title="Thin"><span class="wdot" style="width:4px;height:4px"></span></button>
+          <button class="tb-btn width on" data-width="4" title="Medium"><span class="wdot" style="width:7px;height:7px"></span></button>
+          <button class="tb-btn width" data-width="8" title="Thick"><span class="wdot" style="width:11px;height:11px"></span></button>
+          <button class="tb-btn width" data-width="14" title="Extra thick"><span class="wdot" style="width:15px;height:15px"></span></button>
+        </div>
+        <span class="sep"></span>
+        <button class="tb-btn" id="dashBtn" title="Dashed stroke">
+          <svg viewBox="0 0 16 16" width="15" height="15"><path d="M2 8h3M7 8h2.5M11.5 8H14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+        <span class="draw-hint" id="drawHint"></span>
+      </div>
+
       <div id="canvasWrap" tabindex="-1">
         <div id="world"></div>
         <div id="emptyState" class="empty-state"></div>
