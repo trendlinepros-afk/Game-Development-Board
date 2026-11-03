@@ -169,7 +169,45 @@ function createWindow() {
     }
   });
 
+  installEditContextMenu(mainWindow.webContents);
   updater.init(mainWindow, IS_DEV);
+}
+
+/**
+ * Electron shows no context menu by default. For text being edited (notes in edit
+ * mode, dialog inputs) show a native one with spelling suggestions + clipboard actions.
+ * The canvas and sidebar have their own menus and call preventDefault, so this only
+ * fires for editable text.
+ */
+function installEditContextMenu(wc) {
+  wc.on('context-menu', (_e, params) => {
+    if (!params.isEditable) return;
+    const template = [];
+    const word = params.misspelledWord;
+    if (word) {
+      const suggestions = (params.dictionarySuggestions || []).slice(0, 6);
+      if (suggestions.length) {
+        for (const s of suggestions) template.push({ label: s, click: () => wc.replaceMisspelling(s) });
+      } else {
+        template.push({ label: 'No spelling suggestions', enabled: false });
+      }
+      template.push({ type: 'separator' });
+      template.push({ label: `Add "${word}" to dictionary`, click: () => wc.session.addWordToSpellCheckerDictionary(word) });
+      template.push({ type: 'separator' });
+    }
+    const f = params.editFlags || {};
+    template.push(
+      { label: 'Undo', role: 'undo', enabled: f.canUndo },
+      { label: 'Redo', role: 'redo', enabled: f.canRedo },
+      { type: 'separator' },
+      { label: 'Cut', role: 'cut', enabled: f.canCut },
+      { label: 'Copy', role: 'copy', enabled: f.canCopy },
+      { label: 'Paste', role: 'paste', enabled: f.canPaste },
+      { type: 'separator' },
+      { label: 'Select all', role: 'selectAll', enabled: f.canSelectAll },
+    );
+    Menu.buildFromTemplate(template).popup({ window: BrowserWindow.fromWebContents(wc) });
+  });
 }
 
 // ---------------- IPC ----------------
@@ -330,6 +368,9 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   loadSettings();
   initStore();
+  if (process.platform === 'linux') {
+    try { require('electron').session.defaultSession.setSpellCheckerLanguages(['en-US']); } catch { /* ignore */ }
+  }
 
   // gdb://img/<game>/<board>/<src>  -> image file inside the board folder
   protocol.handle('gdb', (request) => {
