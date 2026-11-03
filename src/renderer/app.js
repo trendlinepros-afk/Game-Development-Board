@@ -30,6 +30,7 @@
       el.className = s === 'saving' ? 'saving' : s === 'error' ? 'error' : '';
       el.textContent = s === 'saving' ? 'Saving…' : s === 'error' ? `Save failed: ${msg}` : 'Saved';
     },
+    onToolChange: () => renderDrawbar(),
     onZoom: (z) => { $('#zoomLabel').textContent = `${Math.round(z * 100)}%`; },
     onExternalChange: ({ added, changed }) => {
       if (added || changed) {
@@ -249,6 +250,7 @@
     const hasBoard = !!state.current;
     wrap.classList.toggle('no-board', !hasBoard);
     $('#toolbar').querySelectorAll('.toolbar-group').forEach((g) => g.classList.toggle('disabled', !hasBoard));
+    $('#drawbar').classList.toggle('disabled', !hasBoard);
     if (hasBoard) { el.innerHTML = ''; el.classList.add('hidden'); return; }
     el.classList.remove('hidden');
     const hasGames = state.games.length > 0;
@@ -304,6 +306,7 @@
 
   function updateFormatBar(sel) {
     sel = sel || { textItems: boardView.selectedTextItems() };
+    if (typeof renderDrawbar === 'function' && document.getElementById('drawbar')) try { renderDrawbar(); } catch { /* during init */ }
     const items = sel.textItems || [];
     const has = items.length > 0 && !!state.current;
     formatBar.classList.toggle('disabled', !has);
@@ -323,6 +326,56 @@
     $('#textColor').value = color.length === 7 ? color : defColor;
     $('#colorSwatch').style.background = st.color || 'var(--text)';
     swatchesEl.querySelectorAll('.swatch').forEach((s) => s.classList.toggle('on', has && (s.dataset.note === (st.background || 'none'))));
+  }
+
+  // ================= drawing toolbar =================
+  const STROKE_COLORS = [
+    ['#e03131', 'Red'], ['#f08c00', 'Orange'], ['#f5c400', 'Yellow'], ['#2f9e44', 'Green'],
+    ['#1c7ed6', 'Blue'], ['#7048e8', 'Purple'], ['ink', 'Ink (black in light mode, white in dark)'], ['#ffffff', 'White'],
+  ];
+  const strokeColorsEl = $('#strokeColors');
+  for (const [c, name] of STROKE_COLORS) {
+    const b = document.createElement('button');
+    b.className = 'stroke-swatch';
+    b.dataset.color = c;
+    b.title = name;
+    b.style.background = c === 'ink' ? 'var(--text)' : c;
+    strokeColorsEl.appendChild(b);
+  }
+  const TOOL_HINTS = {
+    select: '',
+    pen: 'Draw freely · Esc to stop',
+    highlighter: 'Highlight over screenshots · Esc to stop',
+    line: 'Drag to draw a line · Shift snaps to 45°',
+    arrow: 'Drag to draw an arrow · Shift snaps to 45°',
+    rect: 'Drag to draw a box · Shift for a square',
+    ellipse: 'Drag to draw an ellipse · Shift for a circle',
+    eraser: 'Click or drag over drawings to erase them',
+  };
+  const drawbar = $('#drawbar');
+  drawbar.addEventListener('mousedown', (e) => { if (e.target.closest('button')) e.preventDefault(); });
+  drawbar.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.tool) boardView.setTool(b.dataset.tool);
+    else if (b.dataset.color) boardView.setDrawStyle({ color: b.dataset.color });
+    else if (b.dataset.width) boardView.setDrawStyle({ width: Number(b.dataset.width) });
+    else if (b.id === 'dashBtn') boardView.setDrawStyle({ dash: !boardView.drawStyle.dash });
+  });
+  $('#strokeCustom').addEventListener('change', (e) => boardView.setDrawStyle({ color: e.target.value }));
+
+  function renderDrawbar() {
+    const sel = boardView.selectedDrawItems();
+    // When drawings are selected, show their style so changes are predictable.
+    const st = sel.length ? { ...boardView.drawStyle, ...(sel[0].style || {}), dash: !!(sel[0].style || {}).dash } : boardView.drawStyle;
+    drawbar.querySelectorAll('[data-tool]').forEach((b) => b.classList.toggle('on', b.dataset.tool === boardView.tool));
+    drawbar.querySelectorAll('[data-color]').forEach((b) => b.classList.toggle('on', b.dataset.color === st.color));
+    const widthForUi = sel.length && sel[0].kind === 'highlighter' ? null : st.width;
+    drawbar.querySelectorAll('[data-width]').forEach((b) => b.classList.toggle('on', Number(b.dataset.width) === widthForUi));
+    $('#dashBtn').classList.toggle('on', !!st.dash);
+    $('#drawHint').textContent = sel.length && boardView.tool === 'select'
+      ? `${sel.length} drawing${sel.length > 1 ? 's' : ''} selected · pick a color or width to change ${sel.length > 1 ? 'them' : 'it'}`
+      : TOOL_HINTS[boardView.tool] || '';
   }
 
   // ================= toolbar actions =================
