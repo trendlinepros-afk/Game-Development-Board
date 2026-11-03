@@ -51,6 +51,27 @@ Game Development Board\
 
 Folders you create in Explorer show up in the app. To use a different location, click **Data folder** in the sidebar.
 
+## Sharing with your team (export / import)
+
+Anyone on the team can install the app from the download link above.
+
+* **Export:** right-click a game → **Export game…** (all its boards), or a board → **Export board…**.
+  This saves one `.gdboard` file that holds the notes, screenshots and drawings. Send it however you like.
+* **Import:** click the **Import** button (down-arrow next to **+** above the games list), or drag a `.gdboard` file onto the app.
+  Choose to add it to an existing game or create a new one. A board with a name you already have is added alongside it,
+  e.g. "Ideas (2)", so nothing of yours is overwritten.
+
+**Import safety.** An import file is treated as untrusted:
+
+* It's plain data (JSON). Nothing in it is ever run.
+* Note formatting is rebuilt from an allow-list of basic tags (bold, italic, colors, lists…). Scripts, event handlers, links, iframes,
+  SVG and external `url()` references are removed. Notes are cleaned again every time they are displayed.
+* Images are accepted only if their bytes are a real PNG, JPEG, GIF, WebP or BMP (never SVG). PNG and JPEG images are decoded and
+  re-encoded so only the pixels are kept.
+* File and folder names from the export are never used on disk as-is. Images get new random names, and game/board names are cleaned,
+  so an export can't write outside your data folder.
+* Unknown item types, malformed values and oversized content are dropped, and the import dialog lists anything that was skipped.
+
 ## Connecting Claude (MCP)
 
 While the app is running it hosts an MCP server at `http://127.0.0.1:47821/mcp`.

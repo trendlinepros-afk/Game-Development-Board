@@ -1,7 +1,7 @@
 {
   "name": "game-development-board",
   "productName": "Game Development Board",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "MCP-first canvas boards for organizing game development ideas, screenshots and notes.",
   "main": "src/main/main.js",
   "author": "trendlinepros-afk",

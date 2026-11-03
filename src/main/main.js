@@ -12,6 +12,8 @@ app.setPath('userData', path.join(app.getPath('appData'), 'GameDevBoard'));
 const { BoardStore } = require('../core/store');
 const { McpServer } = require('../core/mcp');
 const { startHttpServer, DEFAULT_PORT } = require('../core/http-transport');
+const transfer = require('../core/transfer');
+const crypto = require('crypto');
 const updater = require('./updater');
 
 const IS_DEV = !app.isPackaged;
@@ -162,12 +164,13 @@ function createWindow() {
     if (/^https?:/i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
+  // The window only ever shows the app itself. Block every navigation (e.g. a file
+  // dropped outside the canvas would otherwise be opened in place of the app).
   mainWindow.webContents.on('will-navigate', (e, url) => {
-    if (!url.startsWith('file:')) {
-      e.preventDefault();
-      if (/^https?:/i.test(url)) shell.openExternal(url);
-    }
+    e.preventDefault();
+    if (/^https?:/i.test(url)) shell.openExternal(url);
   });
+  mainWindow.webContents.on('will-attach-webview', (e) => e.preventDefault());
 
   installEditContextMenu(mainWindow.webContents);
   updater.init(mainWindow, IS_DEV);
@@ -350,6 +353,82 @@ function registerIpc() {
     fs.writeFileSync(file, JSON.stringify(config, null, 2));
     return { file };
   });
+  // ---------- export / import ----------
+  const pendingImports = new Map();
+  const safeFileName = (s) => String(s).replace(/[<>:"/\\|?*\u0000-\u001f]/g, '').trim() || 'export';
+
+  handle('transfer:export', async (game, board) => {
+    const gameName = path.basename(store.gameDir(game));
+    const boardName = board ? path.basename(store.boardDir(game, board)) : null;
+    const base = boardName ? `${gameName} - ${boardName}` : gameName;
+    const r = await dialog.showSaveDialog(mainWindow, {
+      title: boardName ? 'Export board' : 'Export game',
+      defaultPath: path.join(app.getPath('desktop'), `${safeFileName(base)}.${transfer.FILE_EXT}`),
+      filters: [{ name: 'Game Dev Board export', extensions: [transfer.FILE_EXT] }],
+    });
+    if (r.canceled || !r.filePath) return null;
+    const buf = transfer.exportToBuffer(store, gameName, boardName ? [boardName] : null, app.getVersion());
+    fs.writeFileSync(r.filePath, buf);
+    return { file: r.filePath, bytes: buf.length };
+  });
+  handle('transfer:showFile', (file) => { shell.showItemInFolder(file); return true; });
+
+  // Images from an import are decoded and re-encoded so only clean pixels are kept.
+  const reencodeImage = (buf, info) => {
+    if (info.ext !== 'png' && info.ext !== 'jpg') return undefined; // GIF/WebP/BMP: header-validated, kept
+    const img = nativeImage.createFromBuffer(buf);
+    if (img.isEmpty()) return null;
+    return info.ext === 'jpg' ? img.toJPEG(92) : img.toPNG();
+  };
+
+  handle('transfer:prepare', async (filePath) => {
+    let file = filePath;
+    if (!file) {
+      const r = await dialog.showOpenDialog(mainWindow, {
+        title: 'Import board or game',
+        properties: ['openFile'],
+        filters: [{ name: 'Game Dev Board export', extensions: [transfer.FILE_EXT] }],
+      });
+      if (r.canceled || !r.filePaths[0]) return null;
+      file = r.filePaths[0];
+    }
+    const st = fs.statSync(file);
+    if (!st.isFile()) throw new Error('Not a file');
+    if (st.size > transfer.LIMITS.fileBytes) throw new Error('File is too large to import');
+    const parsed = transfer.parseExport(fs.readFileSync(file), reencodeImage);
+    const token = crypto.randomUUID();
+    pendingImports.clear(); // only one pending import at a time
+    pendingImports.set(token, parsed);
+    const games = store.listGames().map((g) => g.name);
+    return {
+      token,
+      fileName: path.basename(file),
+      kind: parsed.kind,
+      game: parsed.game,
+      exportedAt: parsed.exportedAt,
+      appVersion: parsed.appVersion,
+      boards: parsed.boards.map((b) => ({ name: b.name, items: b.items.length, images: b.images.size })),
+      itemCount: parsed.itemCount,
+      imageCount: parsed.imageCount,
+      warnings: parsed.warnings,
+      existingGame: games.find((g) => g.toLowerCase() === parsed.game.toLowerCase()) || null,
+      games,
+      newGameName: transfer.uniqueName(games, parsed.game),
+    };
+  });
+  handle('transfer:commit', (token, opts) => {
+    const parsed = pendingImports.get(token);
+    if (!parsed) throw new Error('This import has expired. Please import the file again.');
+    pendingImports.delete(token);
+    const result = transfer.importParsed(store, parsed, {
+      targetGame: opts && opts.targetGame ? String(opts.targetGame) : undefined,
+      newGameName: opts && opts.newGameName ? String(opts.newGameName) : undefined,
+    });
+    notifyTreeChanged();
+    return result;
+  });
+  handle('transfer:cancel', (token) => { pendingImports.delete(token); return true; });
+
   handle('clipboard:writeText', (text) => {
     clipboard.writeText(String(text));
     return true;

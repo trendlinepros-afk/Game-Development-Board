@@ -131,6 +131,8 @@
       { label: 'Rename game…', action: () => renameGame(game) },
       { label: 'Open folder', action: () => api.openFolder(game) },
       'sep',
+      { label: 'Export game…', action: () => exportItem(game, null) },
+      'sep',
       { label: 'Delete game', danger: true, action: () => deleteGame(game) },
     ]);
   }
@@ -140,6 +142,8 @@
       { label: 'Open', action: () => openBoard(game, board) },
       { label: 'Rename board…', action: () => renameBoard(game, board) },
       { label: 'Open folder', action: () => api.openFolder(game, board) },
+      'sep',
+      { label: 'Export board…', action: () => exportItem(game, board) },
       'sep',
       { label: 'Delete board', danger: true, action: () => deleteBoard(game, board) },
     ]);
@@ -237,6 +241,84 @@
       await refreshTree();
     } catch (err) { toast(err.message, 'error'); }
   }
+
+  // ================= export / import =================
+  async function exportItem(game, board) {
+    try {
+      if (state.current && state.current.game === game) await boardView.flush();
+      const r = await (board ? api.exportBoard(game, board) : api.exportGame(game));
+      if (!r) return;
+      const mb = (r.bytes / 1e6).toFixed(1);
+      showModal({
+        title: 'Export ready',
+        body: `<p>Saved <b>${esc(r.file.split(/[\\/]/).pop())}</b> (${mb} MB).</p><p>Send this file to whoever should get it. They import it with the <b>Import</b> button at the top of the sidebar, or by dragging the file onto the app.</p>`,
+        buttons: [{ label: 'Show in folder', value: 'show' }, { label: 'Done', value: true, primary: true }],
+      }).then((v) => { if (v === 'show') api.showFile(r.file); });
+    } catch (err) { toast(`Export failed: ${err.message}`, 'error', 6000); }
+  }
+
+  async function importFile(fileOrPath) {
+    let filePath = null;
+    if (fileOrPath && typeof fileOrPath === 'object') {
+      filePath = api.pathForFile(fileOrPath);
+      if (!filePath) { toast('Could not read that file', 'error'); return; }
+    } else if (typeof fileOrPath === 'string') filePath = fileOrPath;
+    let info;
+    try {
+      info = await api.importPrepare(filePath);
+    } catch (err) {
+      showModal({ title: 'Can’t import this file', body: `<p>${esc(err.message)}</p>`, buttons: [{ label: 'OK', value: true, primary: true }] });
+      return;
+    }
+    if (!info) return;
+    const body = document.createElement('div');
+    const when = info.exportedAt ? new Date(info.exportedAt).toLocaleString() : 'unknown date';
+    const boardList = info.boards.map((b) => `<li><b>${esc(b.name)}</b> <span style="color:var(--faint)">· ${b.items} item${b.items === 1 ? '' : 's'}${b.images ? `, ${b.images} image${b.images === 1 ? '' : 's'}` : ''}</span></li>`).join('');
+    const options = [];
+    if (info.existingGame) options.push(`<option value="existing:${esc(info.existingGame)}" selected>Add to existing game “${esc(info.existingGame)}”</option>`);
+    options.push(`<option value="new" ${info.existingGame ? '' : 'selected'}>New game “${esc(info.newGameName)}”</option>`);
+    for (const g of info.games) if (g !== info.existingGame) options.push(`<option value="existing:${esc(g)}">Add to “${esc(g)}”</option>`);
+    body.innerHTML = `
+      <p>${info.kind === 'board' ? 'A board' : 'A game'} from <b>${esc(info.game)}</b>, exported ${esc(when)}${info.appVersion ? ` (app v${esc(info.appVersion)})` : ''}.</p>
+      <ul style="margin:0 0 12px; padding-left:18px; max-height:180px; overflow:auto">${boardList}</ul>
+      <label>Import into</label>
+      <select id="importTarget" style="width:100%;height:36px;border-radius:7px;border:1px solid var(--border);background:var(--bg);color:var(--text);padding:0 8px;font:inherit">${options.join('')}</select>
+      <p style="margin-top:10px;font-size:12px">Boards with the same name as one you already have are added alongside it, e.g. “Ideas (2)”. Nothing of yours is overwritten.</p>
+      ${info.warnings.length ? `<p style="color:var(--warn);font-size:12px">${info.warnings.map(esc).join('<br/>')}</p>` : ''}`;
+    let target = null;
+    const ok = await showModal({
+      title: `Import “${info.fileName}”`,
+      body,
+      buttons: [
+        { label: 'Cancel', value: false },
+        { label: 'Import', primary: true, value: (m) => { target = m.querySelector('#importTarget').value; return true; } },
+      ],
+    });
+    if (!ok) { api.importCancel(info.token).catch(() => {}); return; }
+    try {
+      const opts = target && target.startsWith('existing:') ? { targetGame: target.slice(9) } : { newGameName: info.newGameName };
+      const r = await api.importCommit(info.token, opts);
+      state.expanded.add(r.game);
+      saveExpanded();
+      await refreshTree();
+      if (r.boards[0]) await openBoard(r.game, r.boards[0]);
+      toast(`Imported ${r.boards.length} board${r.boards.length === 1 ? '' : 's'} into “${r.game}”`);
+    } catch (err) {
+      toast(`Import failed: ${err.message}`, 'error', 6000);
+    }
+  }
+  $('#importBtn').addEventListener('click', () => importFile(null));
+
+  // Dropping a .gdboard file anywhere on the window imports it. Any other drop outside
+  // the canvas is ignored (and never opened by the browser).
+  document.addEventListener('dragover', (e) => { e.preventDefault(); });
+  document.addEventListener('drop', (e) => {
+    e.preventDefault();
+    if (boardView.game && wrap.contains(e.target)) return; // an open board's canvas handles its own drops
+    const f = [...(e.dataTransfer?.files || [])].find((x) => /\.gdboard$/i.test(x.name));
+    if (f) importFile(f);
+    else if (e.dataTransfer?.files?.length) toast('Drop images on the canvas, or .gdboard files to import');
+  });
 
   function renderCrumbs() {
     const c = $('#crumbs');
@@ -570,6 +652,6 @@
     updateFormatBar();
   }
 
-  window.App = { pickImages, openBoard, refreshTree, boardView };
+  window.App = { importFile, pickImages, openBoard, refreshTree, boardView };
   init();
 })();

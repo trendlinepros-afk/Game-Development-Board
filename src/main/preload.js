@@ -1,5 +1,5 @@
 'use strict';
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 async function call(channel, ...args) {
   const r = await ipcRenderer.invoke(channel, ...args);
@@ -43,6 +43,14 @@ contextBridge.exposeInMainWorld('api', {
   openDataRoot: () => call('shell:openDataRoot'),
   openFolder: (game, board) => call('shell:openGameFolder', game, board),
   openExternal: (url) => call('shell:openExternal', url),
+
+  exportGame: (game) => call('transfer:export', game, null),
+  exportBoard: (game, board) => call('transfer:export', game, board),
+  showFile: (file) => call('transfer:showFile', file),
+  importPrepare: (filePath) => call('transfer:prepare', filePath || null),
+  importCommit: (token, opts) => call('transfer:commit', token, opts),
+  importCancel: (token) => call('transfer:cancel', token),
+  pathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch { return null; } },
 
   mcpConnectionInfo: () => call('mcp:connectionInfo'),
   installClaudeDesktop: () => call('mcp:installClaudeDesktop'),

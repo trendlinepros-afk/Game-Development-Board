@@ -8,6 +8,7 @@ const { spawn } = require('child_process');
 const { BoardStore, imageSize, htmlToText, markdownToHtml, sanitizeName } = require('../src/core/store');
 const { McpServer, TOOLS } = require('../src/core/mcp');
 const { startHttpServer } = require('../src/core/http-transport');
+const transfer = require('../src/core/transfer');
 
 // 1x1 PNG
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAADCAYAAAC56t6BAAAAEklEQVR4nGP4z8DwnwGKGXAKAEnzA/1vXyY2AAAAAElFTkSuQmCC', 'base64');
@@ -162,6 +163,144 @@ const json = (result) => JSON.parse(result.content[0].text);
   });
   await test('get_active_board', async () => {
     assert.deepStrictEqual(json(await call(mcp, 'get_active_board', {})).active, { game: 'Racer', board: 'Bugs' });
+  });
+
+  console.log('export / import security');
+  await test('sanitizeHtml strips scripts, handlers, links, svg, css url()', () => {
+    const evil = [
+      '<div>ok<script>alert(1)</script></div>',
+      '<img src=x onerror=alert(1)>',
+      '<b onclick="alert(1)">bold</b>',
+      '<a href="javascript:alert(1)">link</a>',
+      '<svg><script>alert(1)</script></svg>',
+      '<iframe src="https://evil.example"></iframe>',
+      '<span style="background:url(https://evil.example/x.png);color:red">c</span>',
+      '<span style="color: expression(alert(1))">e</span>',
+      '<div style="font-size: 20px; behavior: url(x.htc)">s</div>',
+      '<style>*{background:url(//evil)}</style>',
+      '<!-- <script>alert(1)</script> -->',
+      '<scr<script>ipt>alert(1)</script>',
+      '<img src=x onerror=alert(1)',
+      '<math><mi xlink:href="javascript:alert(1)">x</mi></math>',
+      '<font color="red" face="Arial" onmouseover="x()">f</font>',
+      '<div>&lt;script&gt;alert(1)&lt;/script&gt;</div>',
+    ].join('');
+    const out = transfer.sanitizeHtml(evil);
+    assert.ok(!/<script|<img|<a |<svg|<iframe|<style|<math|onerror|onclick|onmouseover|javascript:|url\(|expression|behavior/i.test(out), out);
+    assert.ok(out.includes('<b>bold</b>'));
+    assert.ok(out.includes('style="color: red"'));
+    assert.ok(out.includes('style="font-size: 20px"'));
+    assert.ok(out.includes('<font color="red" face="Arial">f</font>'));
+    assert.ok(out.includes('&lt;script&gt;'), 'escaped text stays escaped');
+  });
+  await test('sanitizeHtml keeps app-generated formatting intact', () => {
+    const html = '<div><b><span style="font-size: 1.35em;">Title</span></b></div><div>• item <i>x</i> <code>y</code></div><ul><li>a</li></ul>';
+    const out = transfer.sanitizeHtml(html);
+    assert.ok(out.includes('<span style="font-size: 1.35em">Title</span>'));
+    assert.ok(out.includes('<ul><li>a</li></ul>'));
+  });
+
+  await test('export -> import round trip (board and game), with name conflicts', () => {
+    const src = new BoardStore(tmpRoot());
+    src.createGame('Dirt Digger'); src.createBoard('Dirt Digger', 'Ideas'); src.createBoard('Dirt Digger', 'Bugs');
+    const img = src.saveImage('Dirt Digger', 'Ideas', PNG);
+    src.applyPatch('Dirt Digger', 'Ideas', { upserts: [
+      { id: 't1', type: 'text', x: 1, y: 2, w: 300, h: 40, html: '<b>Head</b> turn', text: 'Head turn', style: { background: 'yellow', bold: true }, author: 'user' },
+      { id: 'i1', type: 'image', x: 10, y: 60, w: 2, h: 3, src: img.src, caption: 'loader' },
+      { id: 'd1', type: 'draw', kind: 'arrow', x: 0, y: 0, w: 50, h: 20, points: [[0, 0], [50, 20]], style: { color: '#e03131', width: 4 } },
+    ] }, 'test');
+    const boardBuf = transfer.exportToBuffer(src, 'dirt digger', ['ideas'], '1.0.2');
+    const gameBuf = transfer.exportToBuffer(src, 'Dirt Digger', null, '1.0.2');
+
+    const dst = new BoardStore(tmpRoot());
+    dst.createGame('Dirt Digger'); dst.createBoard('Dirt Digger', 'Ideas');
+    const pb = transfer.parseExport(boardBuf);
+    assert.strictEqual(pb.kind, 'board');
+    assert.strictEqual(pb.imageCount, 1);
+    const r1 = transfer.importParsed(dst, pb, { targetGame: 'Dirt Digger' });
+    assert.deepStrictEqual(r1.boards, ['Ideas (2)']);
+    const b = dst.readBoard('Dirt Digger', 'Ideas (2)');
+    assert.strictEqual(b.items.length, 3);
+    const im = b.items.find((i) => i.type === 'image');
+    assert.ok(/^images\/img_[0-9a-f]+\.png$/.test(im.src));
+    assert.ok(dst.readImage('Dirt Digger', 'Ideas (2)', im.src).buffer.equals(PNG));
+    assert.ok(b.items.every((i) => !['t1', 'i1', 'd1'].includes(i.id)), 'ids are regenerated');
+    assert.deepStrictEqual(b.items.find((i) => i.type === 'text').style, { background: 'yellow', bold: true });
+
+    const pg = transfer.parseExport(gameBuf);
+    assert.strictEqual(pg.kind, 'game');
+    const r2 = transfer.importParsed(dst, pg, { newGameName: 'Dirt Digger' });
+    assert.strictEqual(r2.game, 'Dirt Digger (2)');
+    assert.deepStrictEqual(r2.boards.sort(), ['Bugs', 'Ideas']);
+  });
+
+  await test('malicious export: traversal, fake images, svg, bad items, prototype pollution', () => {
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>').toString('base64');
+    const htmlAsPng = Buffer.from('<html><script>alert(1)</script></html>').toString('base64');
+    const evil = {
+      format: 'game-dev-board-export', formatVersion: 1, kind: 'game',
+      game: '../../../Windows/System32',
+      boards: [
+        {
+          name: '..\\..\\evil',
+          images: {
+            '../../../../evil.exe': { mime: 'image/png', data: PNG.toString('base64') },
+            'images/x.svg': { mime: 'image/svg+xml', data: svg },
+            'images/y.png': { mime: 'image/png', data: htmlAsPng },
+          },
+          items: [
+            { type: 'image', src: '../../../../evil.exe', x: 0, y: 0, w: 10, h: 10 },
+            { type: 'image', src: 'images/x.svg', x: 0, y: 0, w: 10, h: 10 },
+            { type: 'image', src: 'images/y.png', x: 0, y: 0, w: 10, h: 10 },
+            { type: 'image', src: 'C:/Windows/notepad.exe', x: 0, y: 0 },
+            { type: 'script', code: 'alert(1)' },
+            { type: 'text', x: 'NaN', y: 1e99, html: '<img src=x onerror=alert(1)>hi', style: { color: 'red;background:url(//evil)', fontFamily: 'x;}</style><script>', background: 'url(//x)' }, __proto__: { polluted: true } },
+            { type: 'draw', kind: 'pen', points: [[0, 0], ['a', {}], [1, 2]], style: { color: 'javascript:alert(1)', width: 1e9 } },
+            { type: 'draw', kind: 'arrow', points: [[0, 0]] },
+          ],
+        },
+      ],
+    };
+    const json = JSON.stringify(evil)
+      .replace('{"type":"text",', '{"__proto__":{"polluted":true},"constructor":{"prototype":{"polluted":true}},"type":"text",')
+      .replace('{"format":', '{"__proto__":{"polluted":true},"format":');
+    assert.ok(json.includes('{"__proto__":{"polluted":true},"constructor"'));
+    const p = transfer.parseExport(Buffer.from(json));
+    assert.strictEqual({}.polluted, undefined);
+    assert.strictEqual(Object.prototype.polluted, undefined);
+    assert.ok(!('polluted' in p.boards[0].items[1]));
+    assert.ok(!p.game.includes('/') && !p.game.includes('\\') && !p.game.startsWith('.'));
+    const b = p.boards[0];
+    assert.ok(!b.name.includes('/') && !b.name.includes('\\') && !b.name.startsWith('.'));
+    assert.strictEqual(b.images.size, 1, 'only the real PNG survives');
+    const types = b.items.map((i) => i.type + (i.kind ? ':' + i.kind : ''));
+    assert.deepStrictEqual(types, ['image', 'text', 'draw:pen']);
+    const t = b.items[1];
+    assert.strictEqual(t.html, 'hi');
+    assert.deepStrictEqual(t.style, {});
+    assert.strictEqual(t.x, 0);
+    assert.strictEqual(t.y, 1e7);
+    const d = b.items[2];
+    assert.strictEqual(d.style.color, '#e03131');
+    assert.strictEqual(d.style.width, 120);
+    assert.ok(p.warnings.length >= 2);
+
+    const root = tmpRoot();
+    const dst = new BoardStore(root);
+    const r = transfer.importParsed(dst, p, {});
+    const gameDir = path.join(root, r.game);
+    assert.ok(fs.existsSync(gameDir) && path.dirname(gameDir) === root, 'game created inside the data folder');
+    const files = fs.readdirSync(path.join(gameDir, r.boards[0], 'images'));
+    assert.strictEqual(files.length, 1);
+    assert.ok(/^img_[0-9a-f]+\.png$/.test(files[0]));
+    assert.ok(!fs.existsSync(path.join(root, '..', 'evil.exe')));
+  });
+
+  await test('non-exports and future versions are rejected', () => {
+    assert.throws(() => transfer.parseExport(Buffer.from('MZ\x90\x00 not json')), /not a Game Development Board export/);
+    assert.throws(() => transfer.parseExport(Buffer.from('{"hello":1}')), /not a Game Development Board export/);
+    assert.throws(() => transfer.parseExport(Buffer.from('{"format":"game-dev-board-export","formatVersion":99,"boards":[{}]}')), /newer version/);
+    assert.throws(() => transfer.parseExport(Buffer.from('{"format":"game-dev-board-export","formatVersion":1,"boards":[]}')), /no boards/);
   });
 
   console.log('transports');

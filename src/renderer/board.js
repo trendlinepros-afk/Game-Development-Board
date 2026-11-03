@@ -65,6 +65,48 @@
     return c;
   }
 
+  // ---- Defense in depth: every note's HTML is cleaned before it touches the page,
+  // whatever its origin (imports, hand-edited board.json, MCP). Parsing happens in an
+  // inert <template>, so nothing in it runs or loads while we inspect it.
+  const SAFE_TAGS = new Set(['DIV', 'P', 'BR', 'B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'DEL', 'SPAN', 'FONT', 'CODE', 'PRE', 'UL', 'OL', 'LI', 'H1', 'H2', 'H3', 'H4', 'BLOCKQUOTE', 'SUB', 'SUP', 'HR']);
+  const SAFE_CSS = ['color', 'background-color', 'font-size', 'font-family', 'font-weight', 'font-style', 'text-decoration-line', 'text-align'];
+  function sanitizeNoteHtml(html) {
+    if (!html) return '';
+    const tpl = document.createElement('template');
+    tpl.innerHTML = String(html);
+    const walk = (node) => {
+      for (const child of [...node.childNodes]) {
+        if (child.nodeType === Node.TEXT_NODE) continue;
+        if (child.nodeType !== Node.ELEMENT_NODE) { child.remove(); continue; }
+        if (!SAFE_TAGS.has(child.tagName)) {
+          if (/^(SCRIPT|STYLE|IFRAME|OBJECT|EMBED|SVG|MATH|TEMPLATE|NOSCRIPT|TEXTAREA|SELECT|VIDEO|AUDIO|CANVAS|IMG|INPUT|BUTTON|FORM|LINK|META|BASE)$/i.test(child.tagName)) {
+            child.remove();
+          } else {
+            walk(child);
+            child.replaceWith(...child.childNodes);
+          }
+          continue;
+        }
+        const keep = {};
+        for (const prop of SAFE_CSS) {
+          const v = child.style.getPropertyValue(prop);
+          if (v && !/url\(|expression|javascript|var\(/i.test(v)) keep[prop] = v;
+        }
+        const font = child.tagName === 'FONT' ? { color: child.getAttribute('color'), face: child.getAttribute('face'), size: child.getAttribute('size') } : null;
+        for (const a of [...child.attributes]) child.removeAttribute(a.name);
+        for (const [k, v] of Object.entries(keep)) child.style.setProperty(k, v);
+        if (font) {
+          if (font.color && /^#?[\w(),.\s%]{1,40}$/.test(font.color)) child.setAttribute('color', font.color);
+          if (font.face && /^[\w ,\-]{1,80}$/.test(font.face)) child.setAttribute('face', font.face);
+          if (font.size && /^[1-7]$/.test(font.size)) child.setAttribute('size', font.size);
+        }
+        walk(child);
+      }
+    };
+    walk(tpl.content);
+    return tpl.innerHTML;
+  }
+
   const uid = (p) => `${p}_${Math.random().toString(16).slice(2, 10)}${Date.now().toString(16).slice(-4)}`;
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const now = () => new Date().toISOString();
@@ -458,7 +500,7 @@
 
       if (it.type === 'text') {
         const content = el.firstChild;
-        if ((full || created) && this.editingId !== it.id) content.innerHTML = it.html || '';
+        if ((full || created) && this.editingId !== it.id) content.innerHTML = sanitizeNoteHtml(it.html);
         this._applyTextStyle(el, content, it.style || {});
       } else if (it.type === 'draw') {
         this._renderDraw(el, it);
@@ -1141,7 +1183,9 @@
         if (!this.game) return;
         e.preventDefault();
         let pos = this.screenToWorld(e.clientX, e.clientY);
-        const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith('image/'));
+        const exportFile = [...e.dataTransfer.files].find((f) => /\.gdboard$/i.test(f.name));
+        if (exportFile) { window.App.importFile(exportFile); return; }
+        const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith('image/') && f.type !== 'image/svg+xml');
         if (!files.length) { toast('Only image files can be dropped on the board'); return; }
         for (const f of files) {
           try {
