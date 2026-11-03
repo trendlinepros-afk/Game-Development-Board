@@ -1,0 +1,75 @@
+{
+  "name": "game-development-board",
+  "productName": "Game Development Board",
+  "version": "1.0.0",
+  "description": "MCP-first canvas boards for organizing game development ideas, screenshots and notes.",
+  "main": "src/main/main.js",
+  "author": "trendlinepros-afk",
+  "license": "UNLICENSED",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/trendlinepros-afk/Game-Development-Board.git"
+  },
+  "scripts": {
+    "start": "electron .",
+    "test": "node test/core.test.js",
+    "dist": "electron-builder --win nsis --publish never",
+    "release": "electron-builder --win nsis --publish always"
+  },
+  "dependencies": {
+    "electron-log": "^5.2.0",
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.trendlinepros.gamedevboard",
+    "productName": "Game Development Board",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "src/core",
+        "to": "mcp-server",
+        "filter": ["**/*.js"]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "Game-Development-Board-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Game Development Board",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "trendlinepros-afk",
+        "repo": "Game-Development-Board",
+        "releaseType": "release"
+      }
+    ]
+  }
+}

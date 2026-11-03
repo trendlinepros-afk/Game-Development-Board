@@ -1,0 +1,76 @@
+name: Build & Release
+
+# Every push to main builds the Windows installer. If package.json's version
+# doesn't have a GitHub release yet, it publishes one (installer + latest.yml),
+# which is what the in-app "Check for updates" button looks for.
+# To ship an update: bump "version" in package.json and push to main.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm test
+
+  release:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release v$VERSION already exists; building without publishing."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Will publish v$VERSION."
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - run: npm ci
+
+      - name: Build installer and publish release
+        if: steps.version.outputs.exists == 'false'
+        run: npx electron-builder --win nsis --x64 --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build installer only (version already released)
+        if: steps.version.outputs.exists == 'true'
+        run: npx electron-builder --win nsis --x64 --publish never
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Game-Development-Board-Setup-${{ steps.version.outputs.version }}
+          path: |
+            dist/*.exe
+            dist/latest.yml
+          if-no-files-found: error
