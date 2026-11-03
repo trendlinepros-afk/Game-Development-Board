@@ -13,6 +13,58 @@
 
   // Named note colors are theme-aware (see --note-* in styles.css). Raw CSS colors also work.
   const NOTE_COLORS = ['yellow', 'tan', 'green', 'blue', 'pink', 'purple', 'gray'];
+  const DRAW_TOOLS = ['pen', 'highlighter', 'line', 'arrow', 'rect', 'ellipse'];
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const r1 = (n) => Math.round(n * 10) / 10;
+
+  /** Smooth SVG path through points (quadratic curves through midpoints). */
+  function smoothPath(pts) {
+    if (!pts.length) return '';
+    if (pts.length === 1) return `M${pts[0][0]} ${pts[0][1]}L${pts[0][0] + 0.01} ${pts[0][1]}`;
+    if (pts.length === 2) return `M${pts[0][0]} ${pts[0][1]}L${pts[1][0]} ${pts[1][1]}`;
+    let d = `M${pts[0][0]} ${pts[0][1]}`;
+    for (let i = 1; i < pts.length - 1; i++) {
+      const mx = (pts[i][0] + pts[i + 1][0]) / 2;
+      const my = (pts[i][1] + pts[i + 1][1]) / 2;
+      d += `Q${pts[i][0]} ${pts[i][1]} ${r1(mx)} ${r1(my)}`;
+    }
+    const last = pts[pts.length - 1];
+    return `${d}L${last[0]} ${last[1]}`;
+  }
+
+  /** Geometry of a drawing in its own (item-relative) coordinates. */
+  function drawGeometry(it) {
+    const sw = (it.style && it.style.width) || 4;
+    if (it.kind === 'rect') {
+      return { d: `M0 0H${it.w}V${it.h}H0Z` };
+    }
+    if (it.kind === 'ellipse') {
+      const rx = it.w / 2, ry = it.h / 2;
+      return { d: `M0 ${ry}A${rx} ${ry} 0 1 0 ${it.w} ${ry}A${rx} ${ry} 0 1 0 0 ${ry}Z` };
+    }
+    if (it.kind === 'line' || it.kind === 'arrow') {
+      const [a, b] = it.points;
+      let d = `M${a[0]} ${a[1]}L${b[0]} ${b[1]}`;
+      let head = '';
+      if (it.kind === 'arrow') {
+        const ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+        const len = Math.max(12, sw * 3.2);
+        const spread = 0.45;
+        const p1 = [b[0] - len * Math.cos(ang - spread), b[1] - len * Math.sin(ang - spread)];
+        const p2 = [b[0] - len * Math.cos(ang + spread), b[1] - len * Math.sin(ang + spread)];
+        head = `M${r1(p1[0])} ${r1(p1[1])}L${b[0]} ${b[1]}L${r1(p2[0])} ${r1(p2[1])}`;
+        d += head;
+      }
+      return { d };
+    }
+    return { d: smoothPath(it.points || []) };
+  }
+
+  function strokeColor(c) {
+    if (!c || c === 'ink') return 'var(--text)';
+    return c;
+  }
+
   const uid = (p) => `${p}_${Math.random().toString(16).slice(2, 10)}${Date.now().toString(16).slice(-4)}`;
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const now = () => new Date().toISOString();
@@ -27,10 +79,10 @@
   }
 
   class BoardView {
-    constructor({ wrap, world, onSelectionChange, onSaveState, onZoom, onExternalChange }) {
+    constructor({ wrap, world, onSelectionChange, onSaveState, onZoom, onExternalChange, onToolChange }) {
       this.wrap = wrap;
       this.world = world;
-      this.cb = { onSelectionChange, onSaveState, onZoom, onExternalChange };
+      this.cb = { onSelectionChange, onSaveState, onZoom, onExternalChange, onToolChange };
       this.game = null;
       this.board = null;
       this.items = new Map();
@@ -50,6 +102,8 @@
       this.spaceDown = false;
       this.drag = null;
       this.loadToken = 0;
+      this.tool = 'select';
+      this.drawStyle = { color: '#e03131', width: 4, dash: false };
       this._bind();
     }
 
@@ -366,6 +420,8 @@
           const content = el.firstChild;
           content.addEventListener('input', () => this._onTextInput(it.id));
           content.addEventListener('focusout', (e) => this._onTextBlur(it.id, e));
+        } else if (it.type === 'draw') {
+          el.innerHTML = `<svg xmlns="${SVG_NS}"><path class="hit"/><path class="stroke"/></svg>`;
         } else {
           el.innerHTML = '<img draggable="false" alt="" /><div class="handle nw" data-handle="nw"></div><div class="handle ne" data-handle="ne"></div><div class="handle sw" data-handle="sw"></div><div class="handle se" data-handle="se"></div>';
           const img = el.querySelector('img');
@@ -404,6 +460,8 @@
         const content = el.firstChild;
         if ((full || created) && this.editingId !== it.id) content.innerHTML = it.html || '';
         this._applyTextStyle(el, content, it.style || {});
+      } else if (it.type === 'draw') {
+        this._renderDraw(el, it);
       } else if (it.type === 'image') {
         el.style.height = it.h ? `${it.h}px` : 'auto';
         const img = el.querySelector('img');
@@ -416,6 +474,172 @@
         } else if (cap) cap.remove();
       }
       return el;
+    }
+
+    _renderDraw(el, it) {
+      el.style.height = `${it.h || 1}px`;
+      el.className = el.className.replace(/\bkind-\S+/g, '').trim() + ` kind-${it.kind}`;
+      const st = it.style || {};
+      const sw = st.width || 4;
+      const { d } = drawGeometry(it);
+      const stroke = el.querySelector('.stroke');
+      const hit = el.querySelector('.hit');
+      stroke.setAttribute('d', d);
+      hit.setAttribute('d', d);
+      const isHi = it.kind === 'highlighter';
+      Object.assign(stroke.style, {
+        fill: 'none',
+        stroke: strokeColor(st.color),
+        strokeWidth: `${sw}px`,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        strokeDasharray: st.dash ? `${sw * 2.5} ${sw * 2}` : '',
+        opacity: isHi ? '0.38' : (st.opacity != null ? String(st.opacity) : ''),
+      });
+      hit.style.strokeWidth = `calc(${sw}px + 14px * var(--inv))`;
+      // Handles: endpoints for lines/arrows, corners for everything else.
+      el.querySelectorAll('.handle').forEach((h) => h.remove());
+      if (it.kind === 'line' || it.kind === 'arrow') {
+        it.points.forEach((p, i) => {
+          const h = document.createElement('div');
+          h.className = 'handle pt';
+          h.dataset.handle = `p${i}`;
+          h.style.left = `${p[0]}px`;
+          h.style.top = `${p[1]}px`;
+          el.appendChild(h);
+        });
+      } else {
+        for (const c of ['nw', 'ne', 'sw', 'se']) {
+          const h = document.createElement('div');
+          h.className = `handle ${c}`;
+          h.dataset.handle = c;
+          el.appendChild(h);
+        }
+      }
+    }
+
+    /** Set a drawing's bounding box from absolute world points and store points relative to it. */
+    _setDrawPoints(it, abs) {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const [x, y] of abs) { minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); }
+      it.x = r1(minX); it.y = r1(minY);
+      it.w = Math.max(1, r1(maxX - minX)); it.h = Math.max(1, r1(maxY - minY));
+      it.points = abs.map(([x, y]) => [r1(x - it.x), r1(y - it.y)]);
+    }
+
+    // ================= drawing tools =================
+    setTool(tool) {
+      if (this.editingId) this.stopEditing();
+      this.tool = tool;
+      this.wrap.classList.toggle('tool-draw', DRAW_TOOLS.includes(tool));
+      this.wrap.classList.toggle('tool-eraser', tool === 'eraser');
+      if (tool !== 'select') this.clearSelection();
+      this.cb.onToolChange && this.cb.onToolChange(tool);
+    }
+
+    /** Change stroke settings; also applies to any selected drawings. */
+    setDrawStyle(patch) {
+      Object.assign(this.drawStyle, patch);
+      const draws = [...this.selected].map((id) => this.items.get(id)).filter((it) => it && it.type === 'draw');
+      if (draws.length) {
+        this.checkpoint();
+        for (const it of draws) {
+          it.style = { ...(it.style || {}), ...patch };
+          if (!it.style.dash) delete it.style.dash;
+          it.updatedAt = now();
+          this._renderItem(it);
+          this._markDirty(it.id);
+        }
+      }
+      this.cb.onToolChange && this.cb.onToolChange(this.tool);
+    }
+
+    selectedDrawItems() {
+      return [...this.selected].map((id) => this.items.get(id)).filter((it) => it && it.type === 'draw');
+    }
+
+    _startDraw(e, wp) {
+      const kind = this.tool;
+      const st = { color: this.drawStyle.color, width: kind === 'highlighter' ? Math.max(12, this.drawStyle.width * 3) : this.drawStyle.width };
+      if (this.drawStyle.dash && kind !== 'highlighter') st.dash = true;
+      this.checkpoint();
+      const it = {
+        id: uid('drw'), type: 'draw', kind, x: wp.x, y: wp.y, w: 1, h: 1, points: [[0, 0]],
+        style: st, author: 'user', z: this._maxZ() + 1, createdAt: now(), updatedAt: now(),
+      };
+      const abs = [[wp.x, wp.y]];
+      if (kind === 'line' || kind === 'arrow') abs.push([wp.x, wp.y]);
+      this._setDrawPoints(it, abs);
+      this.items.set(it.id, it);
+      this._renderItem(it, true);
+      this._updateHint();
+      this.drag = { kind: 'draw', id: it.id, start: wp, abs, sx: e.clientX, sy: e.clientY };
+    }
+
+    _moveDraw(e, wp) {
+      const d = this.drag;
+      const it = this.items.get(d.id);
+      if (!it) return;
+      if (it.kind === 'pen' || it.kind === 'highlighter') {
+        const last = d.abs[d.abs.length - 1];
+        if (Math.hypot(wp.x - last[0], wp.y - last[1]) < 1.5 / this.view.zoom) return;
+        d.abs.push([wp.x, wp.y]);
+        this._setDrawPoints(it, d.abs);
+      } else if (it.kind === 'line' || it.kind === 'arrow') {
+        const p = e.shiftKey ? this._snap45(d.start, wp) : wp;
+        d.abs = [[d.start.x, d.start.y], [p.x, p.y]];
+        this._setDrawPoints(it, d.abs);
+      } else {
+        let w = wp.x - d.start.x;
+        let h = wp.y - d.start.y;
+        if (e.shiftKey) { const m = Math.max(Math.abs(w), Math.abs(h)); w = Math.sign(w || 1) * m; h = Math.sign(h || 1) * m; }
+        it.x = r1(Math.min(d.start.x, d.start.x + w)); it.y = r1(Math.min(d.start.y, d.start.y + h));
+        it.w = Math.max(1, r1(Math.abs(w))); it.h = Math.max(1, r1(Math.abs(h)));
+        it.points = [];
+      }
+      this._renderItem(it);
+    }
+
+    _endDraw() {
+      const d = this.drag;
+      const it = this.items.get(d.id);
+      if (!it) return;
+      const tiny = (it.kind === 'pen' || it.kind === 'highlighter') ? false : Math.max(it.w, it.h) < 3;
+      if (tiny) {
+        // A click without a drag: discard and drop the checkpoint.
+        this.items.delete(it.id);
+        const el = this.els.get(it.id);
+        if (el) el.remove();
+        this.els.delete(it.id);
+        this.undoStack.pop();
+        this._updateHint();
+        return;
+      }
+      it.updatedAt = now();
+      this._markDirty(it.id);
+    }
+
+    _snap45(a, b) {
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const ang = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+      const len = Math.hypot(dx, dy);
+      return { x: a.x + Math.cos(ang) * len, y: a.y + Math.sin(ang) * len };
+    }
+
+    _eraseAt(clientX, clientY) {
+      const els = document.elementsFromPoint(clientX, clientY);
+      for (const node of els) {
+        const itemEl = node.closest && node.closest('.item-draw');
+        if (!itemEl) continue;
+        const id = itemEl.dataset.id;
+        if (!this.items.has(id)) continue;
+        if (!this.drag.erased) { this.checkpoint(); this.drag.erased = true; }
+        this.items.delete(id);
+        itemEl.remove();
+        this.els.delete(id);
+        this.selected.delete(id);
+        this._markDeleted(id);
+      }
     }
 
     _applyTextStyle(el, content, st) {
@@ -482,6 +706,7 @@
     _selectionChanged() {
       this.cb.onSelectionChange && this.cb.onSelectionChange({
         textItems: this.selectedTextItems(),
+        drawItems: this.selectedDrawItems(),
         count: this.selected.size,
         editing: !!this.editingId,
       });
@@ -820,7 +1045,7 @@
       for (const id of this.selected) {
         const src = this.items.get(id);
         if (!src) continue;
-        const it = { ...clone(src), id: uid(src.type === 'text' ? 'txt' : 'img'), x: src.x + 24, y: src.y + 24, z: ++z, author: 'user', createdAt: now(), updatedAt: now() };
+        const it = { ...clone(src), id: uid({ text: 'txt', image: 'img', draw: 'drw' }[src.type] || 'itm'), x: src.x + 24, y: src.y + 24, z: ++z, author: 'user', createdAt: now(), updatedAt: now() };
         delete it.editedBy;
         this.items.set(it.id, it);
         this._renderItem(it, true);
@@ -957,6 +1182,21 @@
       }
       if (e.button !== 0) return;
 
+      // Drawing tools take over the left button everywhere on the canvas.
+      if (DRAW_TOOLS.includes(this.tool)) {
+        e.preventDefault();
+        if (this.editingId) this.stopEditing();
+        this.wrap.setPointerCapture && this.wrap.setPointerCapture(e.pointerId);
+        this._startDraw(e, wp);
+        return;
+      }
+      if (this.tool === 'eraser') {
+        e.preventDefault();
+        this.drag = { kind: 'erase', sx: e.clientX, sy: e.clientY };
+        this._eraseAt(e.clientX, e.clientY);
+        return;
+      }
+
       if (handle && itemEl) {
         e.preventDefault();
         const id = itemEl.dataset.id;
@@ -967,7 +1207,7 @@
           this._startMove(e, wp);
           return;
         }
-        this.drag = { kind: 'resize', handle: handle.dataset.handle, id, start: wp, orig: { ...it }, moved: false };
+        this.drag = { kind: 'resize', handle: handle.dataset.handle, id, start: wp, orig: clone(it), moved: false };
         return;
       }
 
@@ -999,7 +1239,7 @@
       }
       this.drag = {
         kind: 'pan', sx: e.clientX, sy: e.clientY, vx: this.view.x, vy: this.view.y, moved: false,
-        clickCreate: !wasEditing && !hadSelection, clickDeselect: hadSelection, wp,
+        clickCreate: !wasEditing, clickDeselect: hadSelection, wp,
       };
     }
 
@@ -1025,6 +1265,8 @@
         return;
       }
       const wp = this.screenToWorld(e.clientX, e.clientY);
+      if (d.kind === 'draw') { this._moveDraw(e, wp); return; }
+      if (d.kind === 'erase') { this._eraseAt(e.clientX, e.clientY); return; }
       if (d.kind === 'move') {
         if (!d.moved && dist < DRAG_THRESHOLD) return;
         if (!d.moved) { this.checkpoint(); d.moved = true; }
@@ -1049,6 +1291,26 @@
         const dy = wp.y - d.start.y;
         if (it.type === 'text') {
           it.w = Math.max(60, Math.round(o.w + dx));
+        } else if (it.type === 'draw' && /^p\d$/.test(d.handle)) {
+          // Drag one end of a line/arrow.
+          const idx = Number(d.handle[1]);
+          const abs = o.points.map(([px, py]) => [o.x + px, o.y + py]);
+          const other = abs[1 - idx];
+          const p = e.shiftKey ? this._snap45({ x: other[0], y: other[1] }, wp) : wp;
+          abs[idx] = [p.x, p.y];
+          this._setDrawPoints(it, abs);
+        } else if (it.type === 'draw') {
+          const left = d.handle.includes('w');
+          const top = d.handle.includes('n');
+          const lockAspect = it.kind === 'pen' || it.kind === 'highlighter' ? !e.shiftKey : e.shiftKey;
+          let w = Math.max(4, o.w + (left ? -dx : dx));
+          let h = Math.max(4, o.h + (top ? -dy : dy));
+          if (lockAspect) h = Math.max(4, w * (o.h / o.w));
+          it.x = r1(left ? o.x + (o.w - w) : o.x);
+          it.y = r1(top ? o.y + (o.h - h) : o.y);
+          const sx = w / o.w, sy = h / o.h;
+          it.w = r1(w); it.h = r1(h);
+          if (o.points) it.points = o.points.map(([px, py]) => [r1(px * sx), r1(py * sy)]);
         } else {
           const aspect = (o.h || 1) / (o.w || 1);
           const left = d.handle.includes('w');
@@ -1087,10 +1349,12 @@
       if (!d) return;
       this.drag = null;
       this.wrap.classList.remove('panning');
+      if (d.kind === 'draw') { this.drag = d; this._endDraw(); this.drag = null; return; }
+      if (d.kind === 'erase') return;
       if (d.kind === 'pan') {
         if (!d.moved) {
           if (d.clickDeselect) this.clearSelection();
-          else if (d.clickCreate) this.addText({ x: d.wp.x - 10, y: d.wp.y - 18 }, { edit: true });
+          if (d.clickCreate) this.addText({ x: d.wp.x - 10, y: d.wp.y - 18 }, { edit: true });
         }
         return;
       }
@@ -1128,6 +1392,11 @@
       if (isEditableTarget(t)) return;
       const ctrl = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
+      if (!ctrl && !e.altKey && !e.shiftKey) {
+        const toolKeys = { v: 'select', p: 'pen', h: 'highlighter', l: 'line', a: 'arrow', r: 'rect', o: 'ellipse', e: 'eraser' };
+        if (toolKeys[key]) { e.preventDefault(); this.setTool(toolKeys[key]); return; }
+      }
+      if (e.key === 'Escape' && this.tool !== 'select') { this.setTool('select'); return; }
       if (e.code === 'Space' && !ctrl) { this.spaceDown = true; this.wrap.classList.add('space'); e.preventDefault(); return; }
       if (ctrl && key === 'z' && !e.shiftKey) { e.preventDefault(); this.undo(); return; }
       if (ctrl && (key === 'y' || (key === 'z' && e.shiftKey))) { e.preventDefault(); this.redo(); return; }

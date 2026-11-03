@@ -15,11 +15,12 @@ const DEFAULT_TEXT_WIDTH = 320;
 const GAP = 32;
 
 const INSTRUCTIONS = `Game Development Board: a canvas app where the user organizes game ideas.
-Structure: Games (folders) contain Boards (infinite canvases). Boards hold "text" items (rich notes) and "image" items (usually screenshots of bugs or feature ideas).
+Structure: Games (folders) contain Boards (infinite canvases). Boards hold "text" items (rich notes), "image" items (usually screenshots of bugs or feature ideas) and "draw" items (pen strokes, highlighter, lines, arrows, rectangles, ellipses the user drew, often marking up a screenshot).
 Coordinates are canvas pixels: x grows right, y grows down. Each item has x, y, w, h.
 Typical flow: list_games -> get_board (set include_images=true or call get_image to actually look at screenshots) -> add_text to write your own notes (use near_item_id to place a note right next to the screenshot or note it refers to).
 Text you write supports light markdown (# headings, **bold**, *italic*, - bullets, - [ ] checkboxes, \`code\`). Your items are tagged author "claude" and highlighted for the user.
-get_active_board tells you which board the user is looking at right now.`;
+get_active_board tells you which board the user is looking at right now.
+Use add_shape to point at or circle things in screenshots.`;
 
 // ---------------- schema helpers ----------------
 const S = {
@@ -155,6 +156,23 @@ const TOOLS = [
     },
   },
   {
+    name: 'add_shape',
+    description: 'Draw on a board: an arrow, line, rectangle or ellipse, e.g. to point at or circle something in a screenshot. Coordinates are absolute canvas pixels (use get_board to find where images are). For arrow/line, (x1,y1) is the start and (x2,y2) the end (the arrowhead). For rect/ellipse they are opposite corners.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        game: S.game,
+        board: S.board,
+        kind: { type: 'string', enum: ['arrow', 'line', 'rect', 'ellipse'] },
+        x1: { type: 'number' }, y1: { type: 'number' }, x2: { type: 'number' }, y2: { type: 'number' },
+        color: { type: 'string', description: 'Stroke color, e.g. "#e03131" (red, default), "#1c7ed6", or "ink" for the theme text color.' },
+        width: { type: 'number', description: 'Stroke width in px (default 4).' },
+        dashed: { type: 'boolean' },
+      },
+      required: ['game', 'board', 'kind', 'x1', 'y1', 'x2', 'y2'],
+    },
+  },
+  {
     name: 'move_item',
     description: 'Move and/or resize any item (text or image). For images, giving only width keeps the aspect ratio.',
     inputSchema: {
@@ -246,6 +264,15 @@ function summarizeItem(it) {
     base.text = it.text != null && it.text !== '' ? it.text : htmlToText(it.html);
     if (it.style && Object.keys(it.style).length) base.style = it.style;
     if (it.html && /<(b|i|u|s|strong|em|span|font)\b/i.test(it.html)) base.html = it.html;
+  } else if (it.type === 'draw') {
+    base.kind = it.kind;
+    if (it.style) base.style = it.style;
+    if ((it.kind === 'line' || it.kind === 'arrow') && Array.isArray(it.points) && it.points.length === 2) {
+      base.from = { x: Math.round(it.x + it.points[0][0]), y: Math.round(it.y + it.points[0][1]) };
+      base.to = { x: Math.round(it.x + it.points[1][0]), y: Math.round(it.y + it.points[1][1]) };
+    } else if (Array.isArray(it.points) && it.points.length) {
+      base.point_count = it.points.length;
+    }
   } else if (it.type === 'image') {
     base.src = it.src;
     if (it.caption) base.caption = it.caption;
@@ -508,6 +535,25 @@ class McpServer {
     return textResult({ added: summarizeItem(item) });
   }
 
+  tool_add_shape({ game, board, kind, x1, y1, x2, y2, color, width, dashed }) {
+    if (!['arrow', 'line', 'rect', 'ellipse'].includes(kind)) throw new Error('kind must be arrow, line, rect or ellipse');
+    for (const [k, v] of Object.entries({ x1, y1, x2, y2 })) if (!Number.isFinite(v)) throw new Error(`${k} must be a number`);
+    const data = this.store.readBoard(game, board);
+    const r = (n) => Math.round(n * 10) / 10;
+    const x = Math.min(x1, x2), y = Math.min(y1, y2);
+    const now = new Date().toISOString();
+    const style = { color: color || '#e03131', width: Math.max(1, Math.min(60, Number(width) || 4)) };
+    if (dashed) style.dash = true;
+    const item = {
+      id: newId('drw'), type: 'draw', kind, x: r(x), y: r(y),
+      w: Math.max(1, r(Math.abs(x2 - x1))), h: Math.max(1, r(Math.abs(y2 - y1))),
+      points: kind === 'arrow' || kind === 'line' ? [[r(x1 - x), r(y1 - y)], [r(x2 - x), r(y2 - y)]] : [],
+      style, author: 'claude', z: maxZ(data.items) + 1, createdAt: now, updatedAt: now,
+    };
+    this.store.applyPatch(game, board, { upserts: [item] }, 'mcp');
+    return textResult({ added: summarizeItem(item) });
+  }
+
   tool_move_item({ game, board, item_id, x, y, width, height }) {
     const data = this.store.readBoard(game, board);
     const it = data.items.find((i) => i.id === item_id);
@@ -519,7 +565,11 @@ class McpServer {
       if (it.type === 'image' && !Number.isFinite(height) && it.w) next.h = Math.round(it.h * (width / it.w));
       next.w = Math.max(20, width);
     }
-    if (Number.isFinite(height) && it.type === 'image') next.h = Math.max(20, height);
+    if (Number.isFinite(height) && (it.type === 'image' || it.type === 'draw')) next.h = Math.max(1, height);
+    if (it.type === 'draw' && Array.isArray(it.points) && it.w && it.h) {
+      const sx = next.w / it.w, sy = next.h / it.h;
+      next.points = it.points.map(([px, py]) => [Math.round(px * sx * 10) / 10, Math.round(py * sy * 10) / 10]);
+    }
     next.updatedAt = new Date().toISOString();
     this.store.applyPatch(game, board, { upserts: [next] }, 'mcp');
     return textResult({ moved: summarizeItem(next) });

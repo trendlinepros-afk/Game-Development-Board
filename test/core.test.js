@@ -142,6 +142,19 @@ const json = (result) => JSON.parse(result.content[0].text);
     const after = json(await call(mcp, 'get_board', { game: 'Racer', board: 'Bugs' }));
     assert.strictEqual(after.items.length, 2);
   });
+  await test('add_shape arrow is readable back with endpoints', async () => {
+    const r = json(await call(mcp, 'add_shape', { game: 'Racer', board: 'Bugs', kind: 'arrow', x1: 500, y1: 400, x2: 300, y2: 250, color: '#1c7ed6' }));
+    assert.strictEqual(r.added.kind, 'arrow');
+    assert.deepStrictEqual(r.added.from, { x: 500, y: 400 });
+    assert.deepStrictEqual(r.added.to, { x: 300, y: 250 });
+    assert.strictEqual(r.added.x, 300);
+    const m = json(await call(mcp, 'move_item', { game: 'Racer', board: 'Bugs', item_id: r.added.id, width: 400 }));
+    assert.deepStrictEqual(m.moved.to, { x: 300, y: 250 });
+    assert.deepStrictEqual(m.moved.from, { x: 700, y: 400 });
+    const bad = await call(mcp, 'add_shape', { game: 'Racer', board: 'Bugs', kind: 'star', x1: 0, y1: 0, x2: 1, y2: 1 });
+    assert.strictEqual(bad.isError, true);
+    await call(mcp, 'delete_item', { game: 'Racer', board: 'Bugs', item_id: r.added.id });
+  });
   await test('tool errors come back as isError results', async () => {
     const r = await call(mcp, 'get_board', { game: 'Nope', board: 'x' });
     assert.strictEqual(r.isError, true);

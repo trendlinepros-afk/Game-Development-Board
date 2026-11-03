@@ -30,6 +30,10 @@ https://github.com/trendlinepros-afk/Game-Development-Board/releases/latest/down
 | Duplicate / delete | `Ctrl+D` / `Delete` |
 | Copy an image back out | Select it and press `Ctrl+C` |
 | Dark mode | Sun/moon button at the top of the sidebar |
+| Draw | Second toolbar: select (`V`), free draw (`P`), highlighter (`H`), line (`L`), arrow (`A`), rectangle (`R`), ellipse (`O`), eraser (`E`). `Shift` snaps lines/arrows to 45° and makes squares/circles. `Esc` returns to select |
+| Stroke style | Pick a color, width or dashed. With drawings selected, the change applies to them |
+| Edit drawings | Select a drawing to move it, drag its corners to resize, or drag the ends of a line/arrow |
+| Spelling | Right-click a misspelled word while editing a note for suggestions or "Add to dictionary"
 
 Everything saves automatically. Right-click items, boards or games for more options.
 
@@ -67,13 +71,14 @@ Click **Connect Claude** in the sidebar for one-click setup:
 | `list_games` | All games and their boards |
 | `get_active_board` | The board the user has open right now |
 | `list_boards` | Boards in a game |
-| `get_board` | Every item: note text and formatting, image ids, positions. `include_images: true` attaches the screenshots |
+| `get_board` | Every item: note text and formatting, image ids, drawings, positions. `include_images: true` attaches the screenshots |
 | `get_image` | One image, so Claude can look at it |
 | `search_boards` | Full-text search across everything |
 | `create_game`, `create_board` | Create folders |
 | `add_text` | Write a note (markdown supported). `near_item_id` places it next to a screenshot |
 | `update_text` | Replace or append text, change formatting or position |
 | `add_image` | Place an image from a file path or base64 |
+| `add_shape` | Draw an arrow, line, rectangle or ellipse, e.g. to point at a bug in a screenshot |
 | `move_item`, `set_image_caption`, `delete_item` | Arrange and tidy up |
 
 Claude's notes get an orange "Claude" tag on the board. You get a toast when Claude changes the board you're looking at.
